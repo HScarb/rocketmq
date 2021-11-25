@@ -924,6 +924,12 @@ public class CommitLog {
         return null;
     }
 
+    /**
+     * get next file initial offset
+     *
+     * @param offset current file offset
+     * @return next file initial offset
+     */
     public long rollNextFile(final long offset) {
         int mappedFileSize = this.defaultMessageStore.getMessageStoreConfig().getMappedFileSizeCommitLog();
         return offset + mappedFileSize - offset % mappedFileSize;
