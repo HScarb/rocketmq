@@ -727,6 +727,9 @@ public class ScheduleMessageService extends ConfigManager {
         }
 
         private void resend() {
+            if (ScheduleMessageService.this.deliverExecutorService.isShutdown()) {
+                return;
+            }
             log.info("Resend message, info: {}", this.toString());
 
             // Gradually increase the resend interval.
