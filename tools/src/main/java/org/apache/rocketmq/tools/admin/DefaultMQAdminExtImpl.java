@@ -423,35 +423,20 @@ public class DefaultMQAdminExtImpl implements MQAdminExt, MQAdminExtInner {
     @Override
     public ConsumeStats examineConsumeStats(String consumerGroup,
         String topic) throws RemotingException, MQClientException, InterruptedException, MQBrokerException {
-        TopicRouteData topicRouteData = null;
-        List<String> routeTopics = new ArrayList<>();
-        routeTopics.add(MixAll.getRetryTopic(consumerGroup));
-        if (topic != null) {
-            routeTopics.add(topic);
-            routeTopics.add(KeyBuilder.buildPopRetryTopic(topic, consumerGroup));
-        }
-        for (int i = 0; i < routeTopics.size(); i++) {
-            try {
-                topicRouteData = this.examineTopicRouteInfo(routeTopics.get(i));
-                if (topicRouteData != null) {
-                    break;
-                }
-            } catch (Throwable e) {
-                if (i == routeTopics.size() - 1) {
-                    throw e;
-                }
-            }
-        }
         ConsumeStats result = new ConsumeStats();
-
-        for (BrokerData bd : topicRouteData.getBrokerDatas()) {
-            String addr = bd.selectBrokerAddr();
-            if (addr != null) {
-                ConsumeStats consumeStats = this.mqClientInstance.getMQClientAPIImpl().getConsumeStats(addr, consumerGroup, topic, timeoutMillis * 3);
-                result.getOffsetTable().putAll(consumeStats.getOffsetTable());
-                double value = result.getConsumeTps() + consumeStats.getConsumeTps();
-                result.setConsumeTps(value);
+        for (BrokerData brokerData : this.examineBrokerClusterInfo().getBrokerAddrTable().values()) {
+            if (brokerData.getBrokerAddrs() == null) {
+                continue;
             }
+            String addr = brokerData.selectBrokerAddr();
+            if (StringUtils.isEmpty(addr) || StringUtils.isBlank(addr)) {
+                continue;
+            }
+            final ConsumeStats consumeStats = this.mqClientInstance.getMQClientAPIImpl()
+                .getConsumeStats(addr, consumerGroup, topic, timeoutMillis * 3);
+            result.getOffsetTable().putAll(consumeStats.getOffsetTable());
+            final double value = result.getConsumeTps() + consumeStats.getConsumeTps();
+            result.setConsumeTps(value);
         }
 
         Set<String> topics = new HashSet<>();
@@ -618,14 +603,18 @@ public class DefaultMQAdminExtImpl implements MQAdminExt, MQAdminExtInner {
         String consumerGroup) throws InterruptedException, MQBrokerException,
         RemotingException, MQClientException {
         ConsumerConnection result = new ConsumerConnection();
-        String topic = MixAll.getRetryTopic(consumerGroup);
-        List<BrokerData> brokers = this.examineTopicRouteInfo(topic).getBrokerDatas();
-        BrokerData brokerData = brokers.get(random.nextInt(brokers.size()));
         String addr = null;
-        if (brokerData != null) {
+        for (BrokerData brokerData : this.examineBrokerClusterInfo().getBrokerAddrTable().values()) {
+            if (brokerData.getBrokerAddrs() == null) {
+                continue;
+            }
             addr = brokerData.selectBrokerAddr();
-            if (StringUtils.isNotBlank(addr)) {
-                result = this.mqClientInstance.getMQClientAPIImpl().getConsumerConnectionList(addr, consumerGroup, timeoutMillis);
+            if (StringUtils.isEmpty(addr) || StringUtils.isBlank(addr)) {
+                continue;
+            }
+            result = this.mqClientInstance.getMQClientAPIImpl().getConsumerConnectionList(addr, consumerGroup, timeoutMillis);
+            if (result != null) {
+                break;
             }
         }
 
