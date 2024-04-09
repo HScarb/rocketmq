@@ -50,7 +50,6 @@ public class FlatMessageFileTest {
         storeConfig.setStorePathRootDir(storePath);
         storeConfig.setTieredBackendServiceProvider(PosixFileSegment.class.getName());
         storeConfig.setCommitLogRollingInterval(0);
-        storeConfig.setCommitLogRollingMinimumSize(999);
         metadataStore = new DefaultMetadataStore(storeConfig);
         flatFileFactory = new FlatFileFactory(metadataStore, storeConfig);
     }

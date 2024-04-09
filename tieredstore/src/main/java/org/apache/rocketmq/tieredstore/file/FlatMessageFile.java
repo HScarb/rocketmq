@@ -59,7 +59,6 @@ public class FlatMessageFile implements FlatFileInterface {
 
     protected final List<SelectMappedBufferResult> bufferResultList;
     protected final List<DispatchRequest> dispatchRequestList;
-    protected final ConcurrentMap<String, CompletableFuture<?>> inFlightRequestMap;
 
     public FlatMessageFile(FlatFileFactory fileFactory, String topic, int queueId) {
         this(fileFactory, MessageStoreUtil.toFilePath(
@@ -78,7 +77,6 @@ public class FlatMessageFile implements FlatFileInterface {
         this.lastDestroyTime = new AtomicLong();
         this.bufferResultList = new ArrayList<>();
         this.dispatchRequestList = new ArrayList<>();
-        this.inFlightRequestMap = new ConcurrentHashMap<>();
     }
 
     @Override

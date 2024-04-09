@@ -99,10 +99,6 @@ public class MessageStoreConfig {
     private int tieredStoreFileReservedTime = 72;
     // time of forcing commitLog to roll to next file, default is 24 hour
     private int commitLogRollingInterval = 24;
-    // rolling will only happen if file segment size is larger than commitcp b  LogRollingMinimumSize, default is 128M
-    private int commitLogRollingMinimumSize = 128 * 1024 * 1024;
-    // default is 100, unit is millisecond
-    private int maxCommitJitter = 100;
 
     private boolean tieredStoreGroupCommit = true;
     private int tieredStoreGroupCommitTimeout = 30 * 1000;
@@ -264,22 +260,6 @@ public class MessageStoreConfig {
 
     public void setCommitLogRollingInterval(int commitLogRollingInterval) {
         this.commitLogRollingInterval = commitLogRollingInterval;
-    }
-
-    public int getCommitLogRollingMinimumSize() {
-        return commitLogRollingMinimumSize;
-    }
-
-    public void setCommitLogRollingMinimumSize(int commitLogRollingMinimumSize) {
-        this.commitLogRollingMinimumSize = commitLogRollingMinimumSize;
-    }
-
-    public int getMaxCommitJitter() {
-        return maxCommitJitter;
-    }
-
-    public void setMaxCommitJitter(int maxCommitJitter) {
-        this.maxCommitJitter = maxCommitJitter;
     }
 
     public boolean isTieredStoreGroupCommit() {
