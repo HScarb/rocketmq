@@ -17,6 +17,8 @@
 package org.apache.rocketmq.example.benchmark;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.LongAdder;
 import org.apache.commons.cli.CommandLine;
@@ -67,6 +69,7 @@ public class Producer {
         }
 
         final String topic = commandLine.hasOption('t') ? commandLine.getOptionValue('t').trim() : "BenchmarkTest";
+        final int topicCount = commandLine.hasOption("tc") ? Integer.parseInt(commandLine.getOptionValue("tc")) : 1;
         final int messageSize = commandLine.hasOption('s') ? Integer.parseInt(commandLine.getOptionValue('s')) : 128;
         final boolean keyEnable = commandLine.hasOption('k') && Boolean.parseBoolean(commandLine.getOptionValue('k'));
         final int propertySize = commandLine.hasOption('p') ? Integer.parseInt(commandLine.getOptionValue('p')) : 0;
@@ -78,6 +81,7 @@ public class Producer {
         final int delayLevel = commandLine.hasOption('e') ? Integer.parseInt(commandLine.getOptionValue('e')) : 1;
         final boolean asyncEnable = commandLine.hasOption('y') && Boolean.parseBoolean(commandLine.getOptionValue('y'));
         final int threadCount = asyncEnable ? 1 : commandLine.hasOption('w') ? Integer.parseInt(commandLine.getOptionValue('w')) : 64;
+        final boolean onsClient = commandLine.hasOption('o') && Boolean.parseBoolean(commandLine.getOptionValue('o'));
 
         System.out.printf("topic: %s threadCount: %d messageSize: %d keyEnable: %s propertySize: %d tagCount: %d " +
                 "traceEnable: %s aclEnable: %s messageQuantity: %d%ndelayEnable: %s delayLevel: %s%n" +
@@ -145,30 +149,55 @@ public class Producer {
             String sk = commandLine.hasOption("sk") ? String.valueOf(commandLine.getOptionValue("sk")) : AclClient.ACL_SECRET_KEY;
             rpcHook = AclClient.getAclRPCHook(ak, sk);
         }
-        final DefaultMQProducer producer = new DefaultMQProducer("benchmark_producer", rpcHook, msgTraceEnable, null);
-        producer.setInstanceName(Long.toString(System.currentTimeMillis()));
+        final List<DefaultMQProducer> producerList = new ArrayList<>();
+        DefaultMQProducer producer = null;
+        if (topicCount > 1) {
+            for (int i = 0; i < topicCount; i++) {
+                DefaultMQProducer p = new DefaultMQProducer("benchmark_producer" + i, rpcHook, msgTraceEnable, null);
+                producerList.add(p);
+                p.setInstanceName(Long.toString(System.currentTimeMillis()));
 
-        if (commandLine.hasOption('n')) {
-            String ns = commandLine.getOptionValue('n');
-            producer.setNamesrvAddr(ns);
+                if (commandLine.hasOption('n')) {
+                    String ns = commandLine.getOptionValue('n');
+                    p.setNamesrvAddr(ns);
+                }
+
+                p.setCompressMsgBodyOverHowmuch(Integer.MAX_VALUE);
+
+                p.start();
+            }
+        } else {
+            producer = new DefaultMQProducer("benchmark_producer", rpcHook, msgTraceEnable, null);
+            producer.setInstanceName(Long.toString(System.currentTimeMillis()));
+
+            if (commandLine.hasOption('n')) {
+                String ns = commandLine.getOptionValue('n');
+                producer.setNamesrvAddr(ns);
+            }
+
+            producer.setCompressMsgBodyOverHowmuch(Integer.MAX_VALUE);
+
+            producer.start();
         }
 
-        producer.setCompressMsgBodyOverHowmuch(Integer.MAX_VALUE);
-
-        producer.start();
+        AtomicLong topicIterator = new AtomicLong(0);
+        AtomicLong producerIterator = new AtomicLong(0);
 
         for (int i = 0; i < threadCount; i++) {
             final long msgNumLimit = msgNums[i];
             if (messageNum > 0 && msgNumLimit == 0) {
                 break;
             }
+            DefaultMQProducer finalProducer = producer;
             sendThreadPool.execute(new Runnable() {
                 @Override
                 public void run() {
                     int num = 0;
                     while (true) {
                         try {
-                            final Message msg = buildMessage(topic);
+                            String realTopic = topicCount <= 1
+                                ? topic : topic + topicIterator.getAndIncrement() % topicCount;
+                            final Message msg = buildMessage(realTopic);
                             final long beginTimestamp = System.currentTimeMillis();
                             if (keyEnable) {
                                 msg.setKeys(String.valueOf(beginTimestamp / 1000));
@@ -200,12 +229,12 @@ public class Producer {
                                 }
                             }
                             if (asyncEnable) {
-                                ThreadPoolExecutor e = (ThreadPoolExecutor) producer.getDefaultMQProducerImpl().getAsyncSenderExecutor();
+                                ThreadPoolExecutor e = (ThreadPoolExecutor) finalProducer.getDefaultMQProducerImpl().getAsyncSenderExecutor();
                                 // Flow control
                                 while (e.getQueue().size() > MAX_LENGTH_ASYNC_QUEUE) {
                                     Thread.sleep(SLEEP_FOR_A_WHILE);
                                 }
-                                producer.send(msg, new SendCallback() {
+                                finalProducer.send(msg, new SendCallback() {
                                     @Override
                                     public void onSuccess(SendResult sendResult) {
                                         updateStatsSuccess(statsBenchmark, beginTimestamp);
@@ -217,8 +246,14 @@ public class Producer {
                                     }
                                 });
                             } else {
-                                producer.send(msg);
-                                updateStatsSuccess(statsBenchmark, beginTimestamp);
+                                if (topicCount > 1) {
+                                    final long i = producerIterator.getAndIncrement() % topicCount;
+                                    producerList.get((int)i).send(msg);
+                                    updateStatsSuccess(statsBenchmark, beginTimestamp);
+                                } else {
+                                    finalProducer.send(msg);
+                                    updateStatsSuccess(statsBenchmark, beginTimestamp);
+                                }
                             }
                         } catch (RemotingException e) {
                             statsBenchmark.getSendRequestFailedCount().increment();
@@ -306,6 +341,10 @@ public class Producer {
         opt.setRequired(false);
         options.addOption(opt);
 
+        opt = new Option("tc", "topicCount", true, "Topic count, Default: 1");
+        opt.setRequired(false);
+        options.addOption(opt);
+
         opt = new Option("l", "tagCount", true, "Tag count, Default: 0");
         opt.setRequired(false);
         options.addOption(opt);
@@ -339,6 +378,30 @@ public class Producer {
         options.addOption(opt);
 
         opt = new Option("y", "asyncEnable", true, "Enable async produce, Default: false");
+        opt.setRequired(false);
+        options.addOption(opt);
+
+        opt = new Option("c", "compressEnable", true, "Enable compress msg over 4K, Default: false");
+        opt.setRequired(false);
+        options.addOption(opt);
+
+        opt = new Option("ct", "compressType", true, "Message compressed type, Default: ZLIB");
+        opt.setRequired(false);
+        options.addOption(opt);
+
+        opt = new Option("cl", "compressLevel", true, "Message compressed level, Default: 5");
+        opt.setRequired(false);
+        options.addOption(opt);
+
+        opt = new Option("ch", "compressOverHowMuch", true, "Compress message when body over how much(unit Byte), Default: 4096");
+        opt.setRequired(false);
+        options.addOption(opt);
+
+        opt = new Option("ri", "reportInterval", true, "The number of ms between reports, Default: 10000");
+        opt.setRequired(false);
+        options.addOption(opt);
+
+        opt = new Option("o", "onsClient", true, "Use ons client, Default: false");
         opt.setRequired(false);
         options.addOption(opt);
 

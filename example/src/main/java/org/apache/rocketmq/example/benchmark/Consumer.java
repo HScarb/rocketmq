@@ -17,6 +17,7 @@
 
 package org.apache.rocketmq.example.benchmark;
 
+import java.util.ArrayList;
 import java.util.concurrent.atomic.LongAdder;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Option;
@@ -59,6 +60,7 @@ public class Consumer {
         }
 
         final String topic = commandLine.hasOption('t') ? commandLine.getOptionValue('t').trim() : "BenchmarkTest";
+        final int topicCount = commandLine.hasOption("tc") ? Integer.parseInt(commandLine.getOptionValue("tc")) : 1;
         final int threadCount = commandLine.hasOption('w') ? Integer.parseInt(commandLine.getOptionValue('w')) : 20;
         final String groupPrefix = commandLine.hasOption('g') ? commandLine.getOptionValue('g').trim() : "benchmark_consumer";
         final String isSuffixEnable = commandLine.hasOption('p') ? commandLine.getOptionValue('p').trim() : "false";
@@ -67,6 +69,9 @@ public class Consumer {
         final double failRate = commandLine.hasOption('r') ? Double.parseDouble(commandLine.getOptionValue('r').trim()) : 0.0;
         final boolean msgTraceEnable = commandLine.hasOption('m') && Boolean.parseBoolean(commandLine.getOptionValue('m'));
         final boolean aclEnable = commandLine.hasOption('a') && Boolean.parseBoolean(commandLine.getOptionValue('a'));
+        final boolean clientRebalanceEnable = commandLine.hasOption('c') ? Boolean.parseBoolean(commandLine.getOptionValue('c')) : true;
+        final int reportInterval = commandLine.hasOption("ri") ? Integer.parseInt(commandLine.getOptionValue("ri")) : 10000;
+        final boolean onsClient = commandLine.hasOption('o') && Boolean.parseBoolean(commandLine.getOptionValue('o'));
 
         String group = groupPrefix;
         if (Boolean.parseBoolean(isSuffixEnable)) {
@@ -132,31 +137,78 @@ public class Consumer {
             String sk = commandLine.hasOption("sk") ? String.valueOf(commandLine.getOptionValue("sk")) : AclClient.ACL_SECRET_KEY;
             rpcHook = AclClient.getAclRPCHook(ak, sk);
         }
-        DefaultMQPushConsumer consumer = new DefaultMQPushConsumer(group, rpcHook, new AllocateMessageQueueAveragely(), msgTraceEnable, null);
-        if (commandLine.hasOption('n')) {
-            String ns = commandLine.getOptionValue('n');
-            consumer.setNamesrvAddr(ns);
+        final List<DefaultMQPushConsumer> consumerList = new ArrayList<>();
+        DefaultMQPushConsumer consumer = null;
+        if (topicCount > 1) {
+            for (int i = 0; i < topicCount; i++) {
+                DefaultMQPushConsumer c = new DefaultMQPushConsumer(group + i, rpcHook, new AllocateMessageQueueAveragely(), msgTraceEnable, null);
+                if (commandLine.hasOption('n')) {
+                    String ns = commandLine.getOptionValue('n');
+                    c.setNamesrvAddr(ns);
+                }
+                c.setConsumeThreadMin(threadCount);
+                c.setConsumeThreadMax(threadCount);
+                c.setInstanceName(Long.toString(System.currentTimeMillis()));
+                consumerList.add(c);
+            }
+        } else {
+            consumer = new DefaultMQPushConsumer(group, rpcHook, new AllocateMessageQueueAveragely(), msgTraceEnable, null);
+            if (commandLine.hasOption('n')) {
+                String ns = commandLine.getOptionValue('n');
+                consumer.setNamesrvAddr(ns);
+            }
+            consumer.setConsumeThreadMin(threadCount);
+            consumer.setConsumeThreadMax(threadCount);
+            consumer.setInstanceName(Long.toString(System.currentTimeMillis()));
         }
-        consumer.setConsumeThreadMin(threadCount);
-        consumer.setConsumeThreadMax(threadCount);
-        consumer.setInstanceName(Long.toString(System.currentTimeMillis()));
 
         if (filterType == null || expression == null) {
-            consumer.subscribe(topic, "*");
+            if (topicCount > 1) {
+                for (int i = 0; i < topicCount; i++) {
+                    consumerList.get(i).subscribe(topic + i, "*");
+                }
+            } else {
+                consumer.subscribe(topic, "*");
+            }
         } else {
             if (ExpressionType.TAG.equals(filterType)) {
                 String expr = MixAll.file2String(expression);
                 System.out.printf("Expression: %s%n", expr);
-                consumer.subscribe(topic, MessageSelector.byTag(expr));
+                if (topicCount > 1) {
+                    for (int i = 0; i < topicCount; i++) {
+                        consumerList.get(i).subscribe(topic + i, MessageSelector.byTag(expr));
+                    }
+                } else {
+                    consumer.subscribe(topic, MessageSelector.byTag(expr));
+                }
             } else if (ExpressionType.SQL92.equals(filterType)) {
                 String expr = MixAll.file2String(expression);
                 System.out.printf("Expression: %s%n", expr);
-                consumer.subscribe(topic, MessageSelector.bySql(expr));
+                if (topicCount > 1) {
+                    for (int i = 0; i < topicCount; i++) {
+                        consumerList.get(i).subscribe(topic + i, MessageSelector.bySql(expr));
+                    }
+                } else {
+                    consumer.subscribe(topic, MessageSelector.bySql(expr));
+                }
             } else {
                 throw new IllegalArgumentException("Not support filter type! " + filterType);
             }
         }
 
+        if (topicCount > 1) {
+            for (int i = 0; i < topicCount; i++) {
+                registerListenerAndStartConsumer(consumerList.get(i), statsBenchmarkConsumer, failRate);
+            }
+        } else {
+            registerListenerAndStartConsumer(consumer, statsBenchmarkConsumer, failRate);
+        }
+
+        System.out.printf("Consumer Started.%n");
+    }
+
+    private static void registerListenerAndStartConsumer(DefaultMQPushConsumer consumer, StatsBenchmarkConsumer statsBenchmarkConsumer,
+        double failRate) throws MQClientException {
         consumer.registerMessageListener(new MessageListenerConcurrently() {
             @Override
             public ConsumeConcurrentlyStatus consumeMessage(List<MessageExt> msgs,
@@ -186,12 +238,14 @@ public class Consumer {
         });
 
         consumer.start();
-
-        System.out.printf("Consumer Started.%n");
     }
 
     public static Options buildCommandlineOptions(final Options options) {
         Option opt = new Option("t", "topic", true, "Topic name, Default: BenchmarkTest");
+        opt.setRequired(false);
+        options.addOption(opt);
+
+        opt = new Option("tc", "topicCount", true, "Topic count, Default: 1");
         opt.setRequired(false);
         options.addOption(opt);
 
@@ -202,6 +256,11 @@ public class Consumer {
         opt = new Option("g", "group", true, "Consumer group name, Default: benchmark_consumer");
         opt.setRequired(false);
         options.addOption(opt);
+
+        opt = new Option("gc", "groupCount", true, "Group count, Default: 1");
+        opt.setRequired(false);
+        options.addOption(opt);
+
         opt = new Option("p", "group prefix enable", true, "Is group prefix enable, Default: false");
         opt.setRequired(false);
         options.addOption(opt);
@@ -231,6 +290,14 @@ public class Consumer {
         options.addOption(opt);
 
         opt = new Option("sk", "secretKey", true, "Acl secret key, Default: rocketmq2");
+        opt.setRequired(false);
+        options.addOption(opt);
+
+        opt = new Option("ri", "reportInterval", true, "The number of ms between reports, Default: 10000");
+        opt.setRequired(false);
+        options.addOption(opt);
+
+        opt = new Option("o", "onsClient", true, "Use ons client, Default: false");
         opt.setRequired(false);
         options.addOption(opt);
 
