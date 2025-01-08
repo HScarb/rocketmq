@@ -67,6 +67,7 @@ import org.apache.rocketmq.client.producer.TransactionCheckListener;
 import org.apache.rocketmq.client.producer.TransactionListener;
 import org.apache.rocketmq.client.producer.TransactionMQProducer;
 import org.apache.rocketmq.client.producer.TransactionSendResult;
+import org.apache.rocketmq.client.stat.ProducerStatsManager;
 import org.apache.rocketmq.common.MixAll;
 import org.apache.rocketmq.common.ServiceState;
 import org.apache.rocketmq.common.ThreadFactoryImpl;
@@ -1061,6 +1062,10 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                             requestHeader,
                             timeout - costTimeSync,
                             communicationMode,
+                            null,
+                            null,
+                            this.mQClientFactory,
+                            0,
                             context,
                             this);
                         break;
